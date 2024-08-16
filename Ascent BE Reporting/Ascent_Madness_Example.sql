@@ -1,14 +1,8 @@
-/*
-Select *
-from PROCESSED.BE_CAMPAIGN.SALES_CAMPAIGN
-order by SALES_CAMPAIGN_ID desc
-*/
-
 USE SCHEMA OPERATIONAL.EMAIL_OPS;
-
 use role EMAIL_OPS;
-set campaignid = 2246;
--- {{ params.campaign_id }};
+
+-- TODO: edit this for every new Ascent mailing
+set campaignid = 2280;
 
 -- Flag the mailables
 --use role EMAIL_OPS;
@@ -35,11 +29,8 @@ from (
 where subq.uid = p.uid
   and p.SALES_CAMPAIGN_ID = $campaignid;
 
---  Given that the campaign being served and the IID can change depending on each campaign
---  this will be updated regularly
--- IMPORTANT! Don't forget to update the IIDs at the bottom of the script!
 
--- clear the decks
+-- In the event that you need to reset CAMPAIGN_SPECIFIC_DATA...
 update OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE
 set CAMPAIGN_SPECIFIC_DATA = null
 where CAMPAIGN_SPECIFIC_DATA is not null
@@ -51,6 +42,7 @@ where CAMPAIGN_SPECIFIC_DATA is not null
 update OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE p
 SET CAMPAIGN_SPECIFIC_DATA = to_variant(parse_json('{}'))
 where p.SALES_CAMPAIGN_ID = $campaignid;
+
 
 -- GT- this has been a long time temp thing. Probably doesn't need to go into the default script, but
 -- should (for the time being) still run every time
@@ -127,13 +119,17 @@ from (
 where p.uid = subq.uid
   and p.SALES_CAMPAIGN_ID = $campaignid;
 
+/*--Note (5/10/2024):Hubspot filtering is done in braze now
 -- Holdout anyone that opted out via Hubspot
 UPDATE OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE p
 set AD_HOC_SUPPRESSIONS = OBJECT_INSERT(p.AD_HOC_SUPPRESSIONS, 'HubspotOptOut', 1, false)
   , CAN_MAIL            = 0
 from (
          SELECT pe.UID
-         FROM FIVETRAN.HUBSPOT_ASCENT.CONTACT hub
+,         PROPERTY_NEVERMAIL
+         ,PROPERTY_HS_EMAIL_OPTOUT
+         FROM RAW.HUBSPOT_ASCENT.OBJECTS_CONTACTS hub
+              --FIVETRAN.HUBSPOT_ASCENT.CONTACT hub
                   join raw.FOOL_PARTY.DBO_EMAIL ema
                        on hub.PROPERTY_EMAIL = ema.EMAIL
                   join raw.FOOL_PARTY.DBO_PARTYEMAIL pe
@@ -145,6 +141,10 @@ from (
 where p.uid = subq.uid
   and p.SALES_CAMPAIGN_ID = $campaignid;
 
+select min(UPDATEDAT)
+from RAW.HUBSPOT_ASCENT.OBJECTS_CONTACTS hub
+limit 100
+ */
 -- Holdout anyone that opted out via IID from these campaigns
 UPDATE OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE p
 set AD_HOC_SUPPRESSIONS = OBJECT_INSERT(p.AD_HOC_SUPPRESSIONS, 'IIDOptOut', 1, false)
@@ -160,52 +160,122 @@ from (
 where p.uid = subq.uid
   and p.SALES_CAMPAIGN_ID = $campaignid;
 
+with send as
+         (select p.uid
+               , sum(case when ea.UID is not null then 1 else 0 end) sends
+          from OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE p
+                   left join processed.email.email_activity ea
+                             on p.UID = ea.UID
+                   left join processed.email.issue i
+                             on ea.issue_id = i.issue_id
+                                 and i.ISSUE_NAME ilike '%ascent%'
+                                 and i.ISSUE_NAME like 'BE-%'
+          where SALES_CAMPAIGN_ID = $campaignid
 
-
+            and CAN_MAIL = 1
+          group by 1)
+select *
+from send
+where sends = 0
 --===============================================================
 --Previous Ascent Email Sends
 --===============================================================
 UPDATE OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE p
 set CAMPAIGN_SPECIFIC_DATA = OBJECT_INSERT(p.CAMPAIGN_SPECIFIC_DATA, 'Ascent_Sends', '2+', false)
-from (select distinct p.uid
+from (select p.uid
       from OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE p
                join processed.email.email_activity ea
                     on p.UID = ea.UID
                join processed.email.issue i
                     on ea.issue_id = i.issue_id
-      where SALES_CAMPAIGN_ID = 2246
+      where SALES_CAMPAIGN_ID = $campaignid
         and i.ISSUE_NAME ilike '%ascent%'
         and i.ISSUE_NAME like 'BE-%'
-        and CAN_MAIL = 1) subq
+        and CAN_MAIL = 1
+      group by 1) subq
 where subq.UID = p.uid
-  and p.SALES_CAMPAIGN_ID = 2246;
+  and p.SALES_CAMPAIGN_ID = $campaignid;
+
 
 UPDATE OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE p
 set CAMPAIGN_SPECIFIC_DATA = OBJECT_INSERT(p.CAMPAIGN_SPECIFIC_DATA, 'Ascent_Sends', '1st', true)
 from (select uid
       from OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE
       where CAN_MAIL = 1
-        and SALES_CAMPAIGN_ID = 2246
+        and SALES_CAMPAIGN_ID = $campaignid
         and CAMPAIGN_SPECIFIC_DATA:Ascent_Sends is null) subq
 where subq.uid = p.uid
-  and p.SALES_CAMPAIGN_ID = 2246;
+  and p.SALES_CAMPAIGN_ID = $campaignid;
 
+--==============================================================
+--New rule (4/19)
+--Mail anyone that has had 0 or 1 Ascent Send
+--==============================================================
+--Get Count of Ascent Sends
+UPDATE OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE p
+set CAMPAIGN_SPECIFIC_DATA = OBJECT_INSERT(p.CAMPAIGN_SPECIFIC_DATA, 'Num_of_Ascent_Sends', sends, false)
+from (select p.uid
+           , count(distinct i.ISSUE_NAME) sends
+      from OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE p
+               join processed.email.email_activity ea
+                    on p.UID = ea.UID
+               join processed.email.issue i
+                    on ea.issue_id = i.issue_id
+      where SALES_CAMPAIGN_ID = $campaignid
+        and i.ISSUE_NAME ilike '%ascent%'
+        and i.ISSUE_NAME like 'BE-%'
+        and CAN_MAIL = 1
+      group by 1) subq
+where subq.UID = p.uid
+  and p.SALES_CAMPAIGN_ID = $campaignid;
 
+UPDATE OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE p
+set CAMPAIGN_SPECIFIC_DATA = OBJECT_INSERT(p.CAMPAIGN_SPECIFIC_DATA, 'Num_of_Ascent_Sends', 0, false)
+where SALES_CAMPAIGN_ID = $campaignid
+  and CAMPAIGN_SPECIFIC_DATA:Num_of_Ascent_Sends is null
+  and CAN_MAIL = 1
+
+--Check
+select uid
+     , CAMPAIGN_SPECIFIC_DATA:Num_of_Ascent_Sends
+from OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE p
+where CAN_MAIL = 1
+  and SALES_CAMPAIGN_ID = $campaignid
+  and CAMPAIGN_SPECIFIC_DATA:Num_of_Ascent_Sends in (0, 1);
 
 
 --===============================================================
 --New Model Rules
---All 1st Ascent Mail Receivers Get mail
+--All 1st and 2nd Ascent Mail Receivers Get mail
 --===============================================================
 update OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE p
 set TREATMENT ='1st Ascent Mail'
 from (select uid
       from OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE
       where CAN_MAIL = 1
-        and SALES_CAMPAIGN_ID = 2246
-        and CAMPAIGN_SPECIFIC_DATA:Ascent_Sends = '1st') subq
+        and SALES_CAMPAIGN_ID = $campaignid
+        and CAMPAIGN_SPECIFIC_DATA:Num_of_Ascent_Sends = 0) subq
 where subq.uid = p.uid
-  and p.SALES_CAMPAIGN_ID = 2246;
+  and p.SALES_CAMPAIGN_ID = $campaignid;
+
+update OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE p
+set TREATMENT ='2nd Ascent Mail'
+from (select uid
+      from OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE
+      where CAN_MAIL = 1
+        and SALES_CAMPAIGN_ID = $campaignid
+        and CAMPAIGN_SPECIFIC_DATA:Num_of_Ascent_Sends = 1) subq
+where subq.uid = p.uid
+  and p.SALES_CAMPAIGN_ID = $campaignid;
+
+--Check
+select TREATMENT
+     , count(uid)
+from OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE p
+where CAN_MAIL = 1
+  and SALES_CAMPAIGN_ID = $campaignid
+group by 1;
+
 
 --===============================================================
 --New Model Rules
@@ -213,8 +283,9 @@ where subq.uid = p.uid
 --Top 40% get mail
 --10% of the bottom 60% get mail
 --===============================================================
-select max(TIMESTAMP_UTC)
-from models.output.ascent_click_prediction
+set max_time_stamp_utc = (select max(TIMESTAMP_UTC)
+                          from models.output.ascent_click_prediction);
+
 
 --get >= 40 percentile of new model
 update OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE p
@@ -226,13 +297,14 @@ from (select uid
             FROM OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE aj
                      join models.output.ascent_click_prediction ss
                           on aj.uid = ss.UID
-            where ss.TIMESTAMP_UTC = '2023-12-12 15:11:31.976000000'-- change date
-              and aj.SALES_CAMPAIGN_ID = 2246
+            where ss.TIMESTAMP_UTC = $max_time_stamp_utc
+              and aj.SALES_CAMPAIGN_ID = $campaignid
               and aj.can_mail = 1
-              and aj.CAMPAIGN_SPECIFIC_DATA:Ascent_Sends = '2+')
+              and aj.TREATMENT is null)
       where tile <= 4) subq
 where p.uid = subq.uid
-  and p.SALES_CAMPAIGN_ID = 2246;
+  and p.SALES_CAMPAIGN_ID = $campaignid;
+
 
 --Get 10% of the bottom 60%
 UPDATE OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE p
@@ -245,19 +317,21 @@ from (select uid
             FROM OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE aj
                      join models.output.ascent_click_prediction ss
                           on aj.uid = ss.UID
-            where ss.TIMESTAMP_UTC = '2023-12-12 15:11:31.976000000'-- change date
-              and aj.SALES_CAMPAIGN_ID = 2246
+            where ss.TIMESTAMP_UTC = $max_time_stamp_utc
+              and aj.SALES_CAMPAIGN_ID = $campaignid
               and aj.can_mail = 1
-              and aj.CAMPAIGN_SPECIFIC_DATA:Ascent_Sends = '2+')
+              and aj.TREATMENT is null)
       where tile > 4) subq
 where p.uid = subq.uid
-  and p.SALES_CAMPAIGN_ID = 2246;
+  and p.SALES_CAMPAIGN_ID = $campaignid;
+
 
 --Set holdout group to can mail =0
 UPDATE OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE p
 set CAN_MAIL=0
 where TREATMENT = 'Bottom_60Pct_HeldOut'
-  and p.SALES_CAMPAIGN_ID = 2246;
+  and p.SALES_CAMPAIGN_ID = $campaignid;
+
 
 --Add Scores to the table
 UPDATE OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE p
@@ -267,11 +341,21 @@ from (
          FROM OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE aj
                   join models.output.ascent_click_prediction ss
                        on aj.uid = ss.UID
-         where ss.TIMESTAMP_UTC = '2023-12-12 15:11:31.976000000'-- change date
-           and aj.SALES_CAMPAIGN_ID = 2246
+         where ss.TIMESTAMP_UTC = $max_time_stamp_utc-- change date
+           and aj.SALES_CAMPAIGN_ID = $campaignid
      ) z
 where p.uid = z.uid
-  and p.SALES_CAMPAIGN_ID = 2246;
+  and p.SALES_CAMPAIGN_ID = $campaignid;
+
+--Check
+select CAN_MAIL
+     , TREATMENT
+     , count(uid)
+from OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE p
+where
+    --CAN_MAIL = 1
+    SALES_CAMPAIGN_ID = $campaignid
+group by 1,2;
 
 --=================================================================
 --Set null treatments to can mail =0
@@ -280,13 +364,13 @@ update OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE
 set can_mail = 0
 where treatment is null
   and can_mail = 1
-  and SALES_CAMPAIGN_ID = 2246;
+  and SALES_CAMPAIGN_ID = $campaignid;
 
 -- =================================================================
 -- Flagging the treatment field as needed.
 -- =================================================================
 -- GT: on the fence about making this live code or leaving in this comment. It's good for re-setting, but
--- that can be disastrous if things are in flight. Leaving as a comment for now, but def side-eyeing
+-- that can be disastrous if things are in flight. Leaving as a comment for now, and def side-eyeing
 /*
     update  OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE
     set     treatment = null
@@ -300,13 +384,13 @@ set treatment           = 'Unscored- No Mail'
 from (
          select uid
          from OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE
-         where SALES_CAMPAIGN_ID = 2246
+         where SALES_CAMPAIGN_ID = $campaignid
            and can_mail = 1
            and AD_HOC_SUPPRESSIONS = '{}' -- This is the default value for the Ad hoc suppressions field. If it's this value there's no ad hoc supps! Woo!
            and offer is null
      ) z
 where m.uid = z.uid
-  and m.SALES_CAMPAIGN_ID = 2246
+  and m.SALES_CAMPAIGN_ID = $campaignid
   and m.can_mail = 1;
 
 USE SCHEMA OPERATIONAL.EMAIL_OPS;
@@ -315,7 +399,7 @@ use role EMAIL_OPS;
 set TREATMENT='1st Ascent Mail'
     select * from OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE p
 
-where SALES_CAMPAIGN_ID=2246
+where SALES_CAMPAIGN_ID=$campaignid
 and CAMPAIGN_SPECIFIC_DATA:Ascent_Sends='1st'
  */
 -- =================================================================
@@ -332,11 +416,11 @@ from (
          FROM OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE aj
                   join models.output.ascent_click_prediction ss
                        on aj.uid = ss.UID
-         where ss.TIMESTAMP_UTC = '2023-12-12 15:11:31.976000000' --change date
-           and aj.SALES_CAMPAIGN_ID = 2246
+         where ss.TIMESTAMP_UTC = $max_time_stamp_utc --change date
+           and aj.SALES_CAMPAIGN_ID = $campaignid
      ) z
 where p.uid = z.uid
-  and p.SALES_CAMPAIGN_ID = 2246;
+  and p.SALES_CAMPAIGN_ID = $campaignid;
 
 
 -- =================================================================
@@ -345,10 +429,10 @@ where p.uid = z.uid
 -- now get the IIDs in there
 USE SCHEMA OPERATIONAL.EMAIL_OPS;
 use role EMAIL_OPS;
-set campaignid = 2246;
+
 
 update OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE
-set IID = 205496260
+set IID = 205496260 -- Ascent campaigns re-use the IID, so it's OK that this is hard-coded
 where treatment is not null
   and can_mail = 1
   and SALES_CAMPAIGN_ID = $campaignid;
@@ -357,21 +441,42 @@ where treatment is not null
 -- =================================================================
 -- Check counts
 -- =================================================================
-select
-       CAMPAIGN_SPECIFIC_DATA:Ascent_Sends
-     ,TREATMENT
-     ,IID
+
+-- by segment
+select can_mail
+    -- , CAMPAIGN_SPECIFIC_DATA:Ascent_Sends
+     , TREATMENT
+     , IID
      , count(uid)
 from OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE
-where  SALES_CAMPAIGN_ID = 2246
---and CAN_MAIL=1
-group by 1,2,3;
+where SALES_CAMPAIGN_ID = $campaignid
+group by all
+order by 1;
+
+
+-- compare this send to previous sends as a gut check
+with campaigns as
+         (
+             select top 5 sales_campaign_id, campaign_name
+                  , campaign_start_date
+                  , iff(sales_campaign_id = $campaignid, true, false) as is_this_campaign
+             from processed.be_campaign.sales_campaign
+             where campaign_name ilike '%ascent%'
+             order by campaign_start_date desc
+         )
+
+select c.*, count(distinct uid)
+from campaigns c
+         join OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE o
+              on c.sales_campaign_id = o.sales_campaign_id
+                  and o.iid is not null
+group by all
+order by 1;
+
 
 -- =================================================================
 -- Remove the records from the last Ascent mailing campaign
 -- =================================================================
-USE SCHEMA OPERATIONAL.EMAIL_OPS;
-use role EMAIL_OPS;
 
 set latestascentinsertdate = (
     Select cast(max(date_created) as date)
@@ -379,10 +484,12 @@ set latestascentinsertdate = (
     where CAMPAIGN_INTERACTION_ID = 205496260
       and ADD_OR_REMOVE = 1
 );
-set campaignid = 2246;--{{ params.campaign_id }};
+set campaignid = $campaignid;
 set add_or_delete = 0;
 set maxBrazeID = (Select max(ID)
                   from OPERATIONAL.EMAIL_OPS.Braze_Member_Marketing);
+
+
 insert into OPERATIONAL.EMAIL_OPS.Braze_Member_Marketing
 select $maxBrazeID + 1
      , mad.ACCOUNT_ID
@@ -405,22 +512,23 @@ select p.uid
 from OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE p
          left join models.output.ascent_click_prediction ss
                    on p.uid = ss.UID
-                       and ss.TIMESTAMP_UTC = '2023-12-12 15:11:31.976000000'
-where SALES_CAMPAIGN_ID = 2246
+                       and ss.TIMESTAMP_UTC = $max_time_stamp_utc
+where SALES_CAMPAIGN_ID = $campaignid
   and CAN_MAIL = 1
   and p.treatment is null
-group by 1
+group by all;
+
 
 Select count(uid), treatment, offer
 from OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE
-where sales_campaign_id = 2246
+where sales_campaign_id = $campaignid
   and can_mail = 1
-group by treatment, offer
+group by treatment, offer;
 
 -- Why are there null treatments in here?
 Select *
 from OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE
-where sales_campaign_id = 2246
+where sales_campaign_id = $campaignid
   and can_mail = 1
   and treatment is null
 group by treatment;
@@ -434,7 +542,7 @@ set treatment = null,
 where treatment is null
   and can_mail = 1
   --and AD_HOC_SUPPRESSIONS <> '{}'
-  and SALES_CAMPAIGN_ID = 2246;
+  and SALES_CAMPAIGN_ID = $campaignid;
 
 
 -- ==============================================
@@ -477,13 +585,13 @@ order by asce.CAMPAIGN_START_DATE;
 
 Select count(uid)
 from OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE
-where SALES_CAMPAIGN_ID = 2246
+where SALES_CAMPAIGN_ID = $campaignid
   and can_mail = 1
   and treatment is not null
 
 Select count(uid), treatment
 from OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE
-where SALES_CAMPAIGN_ID = 2246
+where SALES_CAMPAIGN_ID = $campaignid
 group by treatment
 
 -- Review the Numbers and suppressions
@@ -515,7 +623,7 @@ FROM (
                         'N'
                     END AS mailable
          FROM OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE pool
-         where pool.SALES_CAMPAIGN_ID = 2246
+         where pool.SALES_CAMPAIGN_ID = $campaignid
      ) z
 GROUP BY z.mailable,
          z.Member_Status
@@ -548,7 +656,7 @@ select case
            else AD_HOC_SUPPRESSIONS end as suppression_reason
      , count(distinct uid)              AS UIDs
 from OPERATIONAL.EMAIL_OPS.MEMBER_MKTG_AUDIENCE
-where SALES_CAMPAIGN_ID = 2246
+where SALES_CAMPAIGN_ID = $campaignid
   and can_mail = 0
 group by case
              when (MF1_SUB = 1) then 'MF ONE sub'

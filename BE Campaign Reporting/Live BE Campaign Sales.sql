@@ -26,26 +26,21 @@ FROM RAW.FOOL_COMMERCE.DBO_INVOICEITEM AS ii
          LEFT JOIN RAW.FOOL_COMMERCE.dbo_Subscription x
                    ON x.ProductId = po.ProductId
                        AND x.uid = oh.DeliverToUid
-                       AND x.StartDate >= '2023-12-05'
+                       AND x.StartDate >= '2023-12-05' --change to the campaign start date
          left join PROCESSED.SHARED.SOURCE sour
                    on sour.SOURCE_CODE = oh.SOURCECODE
 
          left join PROCESSED.BE_CAMPAIGN.V_MARKETING_AUDIENCE_ALL_CAMPAIGNS maac
                    on maac.uid = oh.delivertouid
-                       AND CAMPAIGN = 'MPDec23'
+                       AND CAMPAIGN = 'MPDec23' --edit this to the campaign 
 
 
-WHERE CAST(oh.orderdate AS DATE) >= '2023-12-05' --and '2021-04-08 23:50:00'
+WHERE CAST(oh.orderdate AS DATE) >= '2023-12-05' --change to the campaign start date
 
   AND PromotionName NOT LIKE '%AOX%'
-  --AND PromotionName NOT LIKE '%Ret%'
   AND TransactionName = 'Payment'
---and PRODUCTNAME like '%Hidden%'
   and PROMOTIONNAME ilike '%window%'
-  --and PROMOTIONNAME ilike '%IU%'
-
- -- and oh.DELIVERTOUID=2057165092
---and PRODUCTNAME ='Everlasting Portfolio'--ilike any ('%Epic%','%Virtu%')
+ 
 GROUP BY oh.delivertouid
 ,oh.PLACEDBYUID
        , maac.TREATMENT
