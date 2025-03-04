@@ -15,7 +15,7 @@ WITH campaign AS (
 --Comp2
              LEFT JOIN PROCESSED.BE_CAMPAIGN.SALES_CAMPAIGN sc_two
                        ON sc_two.SALES_CAMPAIGN_ID = scc.COMPARISON_CAMPAIGN_ID_2
-    WHERE sc.CAMPAIGN_YEAR_MONTH = '2024.08.13 AI Software')
+    WHERE sc.CAMPAIGN_YEAR_MONTH = <Parameters.campaign_year_month>)
 
 --Main
 SELECT c.CAMPAIGN AS main_campaign
@@ -38,7 +38,7 @@ SELECT c.CAMPAIGN AS main_campaign
      , es.PRODUCT_NAME
      , es.DESCRIPTION
      , es.CHANNEL
-     , am.TREATMENT
+     , iff(am.TREATMENT like '%Formers%' and CAMPAIGN_SPECIFIC_DATA:Level ='4', '(4a) Level 4: Fool Portfolio Members (previously mislabeled)',TREATMENT) as TREATMENT
      , am.offer
      , ecap.UID   AS ecap_uid
      , es.VEHICLE
@@ -50,6 +50,7 @@ SELECT c.CAMPAIGN AS main_campaign
      , oi.PROMOTIONOFFERID AS OI_PROMOTIONOFFERID
      , pro.PROMOTIONOFFERNAME
      , oi.UNITPRICE
+,CAMPAIGN_SPECIFIC_DATA:Level as Level
 FROM campaign c
          JOIN PROCESSED.BE_CAMPAIGN.V_MARKETING_AUDIENCE_ALL_CAMPAIGNS am
     --DW.DW_SUMMARY.DBO_REPORTDATA_ALL_MADNESS am
@@ -62,7 +63,7 @@ FROM campaign c
                    ON es.UID = ae.UID
                        AND es.CAMPAIGN_YEAR_MONTH = ae.CAMPAIGN
                        AND DESCRIPTION ILIKE '%Window&%'
-         LEFT JOIN PROCESSED.BE_CAMPAIGN.V_BE_ECAPS_SIMPLE ecap
+         LEFT JOIN REPORTING.SALES.V_BE_ECAPS ecap
                    ON ecap.UID = am.UID
                        AND ecap.CAMPAIGN = am.CAMPAIGN
          LEFT JOIN raw.FOOL_COMMERCE.DBO_ORDERITEM oi
@@ -105,6 +106,7 @@ SELECT c.CAMPAIGN AS main_campaign
      , oi.PROMOTIONOFFERID AS OI_PROMOTIONOFFERID
      , pro.PROMOTIONOFFERNAME
      , oi.UNITPRICE
+,CAMPAIGN_SPECIFIC_DATA:Level as Level
 FROM campaign c
          LEFT JOIN PROCESSED.BE_CAMPAIGN.V_MARKETING_AUDIENCE_ALL_CAMPAIGNS am_1
     --DW.DW_SUMMARY.DBO_REPORTDATA_ALL_MADNESS am_1
@@ -117,7 +119,7 @@ FROM campaign c
                    ON es.UID = ae_1.UID
                        AND es.CAMPAIGN_YEAR_MONTH = ae_1.CAMPAIGN
                        AND DESCRIPTION ILIKE '%Window&%'
-         LEFT JOIN PROCESSED.BE_CAMPAIGN.V_BE_ECAPS_SIMPLE ecap
+         LEFT JOIN REPORTING.SALES.V_BE_ECAPS ecap
                    ON ecap.UID = ae_1.UID
                        AND ecap.CAMPAIGN = ae_1.CAMPAIGN
          LEFT JOIN raw.FOOL_COMMERCE.DBO_ORDERITEM oi
@@ -160,6 +162,7 @@ SELECT c.CAMPAIGN AS main_campaign
      , oi.PROMOTIONOFFERID AS OI_PROMOTIONOFFERID
      , pro.PROMOTIONOFFERNAME
      , oi.UNITPRICE
+,CAMPAIGN_SPECIFIC_DATA:Level as Level
 FROM campaign c
          LEFT JOIN PROCESSED.BE_CAMPAIGN.V_MARKETING_AUDIENCE_ALL_CAMPAIGNS am_2
                    ON c.comp_two = am_2.CAMPAIGN
@@ -170,7 +173,7 @@ FROM campaign c
                    ON es.UID = ae_2.UID
                        AND es.CAMPAIGN_YEAR_MONTH = ae_2.CAMPAIGN
                        AND DESCRIPTION ILIKE '%Window&%'
-         LEFT JOIN PROCESSED.BE_CAMPAIGN.V_BE_ECAPS_SIMPLE ecap
+         LEFT JOIN REPORTING.SALES.V_BE_ECAPS ecap
                    ON ecap.UID = ae_2.UID
                        AND ecap.CAMPAIGN = ae_2.CAMPAIGN
          LEFT JOIN raw.FOOL_COMMERCE.DBO_ORDERITEM oi
